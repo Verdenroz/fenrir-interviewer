@@ -42,14 +42,6 @@ export default function Home() {
     conversationStateRef.current = conversationState;
   }, [conversationState]);
 
-  // Start interview immediately on component mount
-  useEffect(() => {
-    if (!hasStartedInterview) {
-      startInterview();
-      setHasStartedInterview(true);
-    }
-  }, [hasStartedInterview]);
-
   const startInterview = useCallback(async () => {
     const welcomeMessage = `Welcome to your coding interview! I'll be helping you work through the "${getProblemDisplayName(currentProblemId)}" problem today.
 
@@ -61,6 +53,14 @@ To get started, could you please walk me through your initial thoughts on how yo
     // Set state to ready immediately
     setConversationState(CONVERSATION_STATES.READY);
   }, [currentProblemId]);
+
+  // Start interview immediately on component mount
+  useEffect(() => {
+    if (!hasStartedInterview) {
+      startInterview();
+      setHasStartedInterview(true);
+    }
+  }, [hasStartedInterview, startInterview]);
 
   const getToken = useCallback(async () => {
     try {
@@ -82,65 +82,6 @@ To get started, could you please walk me through your initial thoughts on how yo
       throw error;
     }
   }, []);
-
-  const generateAiResponse = useCallback(async (userInput) => {
-    if (!userInput.trim()) return;
-
-    try {
-      // Clear user message states immediately when AI starts responding
-      setCurrentUserMessage('');
-      setPartialTranscript('');
-      setConversationState(CONVERSATION_STATES.AI_SPEAKING);
-
-      const userMessage = { role: 'user', content: userInput, timestamp: Date.now() };
-      setConversationHistory(prev => [...prev, userMessage]);
-
-      const response = await fetch('/api/interview/generate', {
-        method: 'POST',
-        headers: {
-          'Content-Type': 'application/json',
-        },
-        body: JSON.stringify({
-          userInput,
-          conversationHistory,
-          problemContext: getProblemContext(currentProblemId),
-          currentCode: codeContent,
-          language: currentLanguage
-        })
-      });
-
-      if (!response.ok) {
-        throw new Error('Failed to generate response');
-      }
-
-      const data = await response.json();
-      const responseText = data.text || 'I understand. Please continue.';
-
-      const aiMessage = { role: 'assistant', content: responseText, timestamp: Date.now() };
-      setConversationHistory(prev => [...prev, aiMessage]);
-
-      let responseAudio = null;
-      if (data.audio) {
-        const binaryString = atob(data.audio);
-        const bytes = new Uint8Array(binaryString.length);
-        for (let i = 0; i < binaryString.length; i++) {
-          bytes[i] = binaryString.charCodeAt(i);
-        }
-        responseAudio = new Blob([bytes], { type: 'audio/wav' });
-      }
-
-      if (responseAudio) {
-        await playAudioResponse(responseAudio);
-      } else {
-        setConversationState(CONVERSATION_STATES.READY);
-      }
-
-    } catch (error) {
-      console.error('Error generating AI response:', error);
-      setError('Failed to generate response: ' + error.message);
-      setConversationState(CONVERSATION_STATES.READY);
-    }
-  }, [conversationHistory, codeContent, currentProblemId, currentLanguage]);
 
   const playAudioResponse = useCallback(async (audioBlob) => {
     try {
@@ -216,6 +157,65 @@ To get started, could you please walk me through your initial thoughts on how yo
       setConversationState(CONVERSATION_STATES.READY);
     }
   }, []);
+
+  const generateAiResponse = useCallback(async (userInput) => {
+    if (!userInput.trim()) return;
+
+    try {
+      // Clear user message states immediately when AI starts responding
+      setCurrentUserMessage('');
+      setPartialTranscript('');
+      setConversationState(CONVERSATION_STATES.AI_SPEAKING);
+
+      const userMessage = { role: 'user', content: userInput, timestamp: Date.now() };
+      setConversationHistory(prev => [...prev, userMessage]);
+
+      const response = await fetch('/api/interview/generate', {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+        },
+        body: JSON.stringify({
+          userInput,
+          conversationHistory,
+          problemContext: getProblemContext(currentProblemId),
+          currentCode: codeContent,
+          language: currentLanguage
+        })
+      });
+
+      if (!response.ok) {
+        throw new Error('Failed to generate response');
+      }
+
+      const data = await response.json();
+      const responseText = data.text || 'I understand. Please continue.';
+
+      const aiMessage = { role: 'assistant', content: responseText, timestamp: Date.now() };
+      setConversationHistory(prev => [...prev, aiMessage]);
+
+      let responseAudio = null;
+      if (data.audio) {
+        const binaryString = atob(data.audio);
+        const bytes = new Uint8Array(binaryString.length);
+        for (let i = 0; i < binaryString.length; i++) {
+          bytes[i] = binaryString.charCodeAt(i);
+        }
+        responseAudio = new Blob([bytes], { type: 'audio/wav' });
+      }
+
+      if (responseAudio) {
+        await playAudioResponse(responseAudio);
+      } else {
+        setConversationState(CONVERSATION_STATES.READY);
+      }
+
+    } catch (error) {
+      console.error('Error generating AI response:', error);
+      setError('Failed to generate response: ' + error.message);
+      setConversationState(CONVERSATION_STATES.READY);
+    }
+  }, [conversationHistory, codeContent, currentProblemId, currentLanguage]);
 
   const startListening = useCallback(async () => {
     try {
@@ -295,7 +295,7 @@ To get started, could you please walk me through your initial thoughts on how yo
           channelCount: 1,
           echoCancellation: true,
           noiseSuppression: true,
-          autoGainControl: true // Added for better audio quality
+          autoGainControl: true
         }
       });
       streamRef.current = stream;
@@ -429,7 +429,7 @@ To get started, could you please walk me through your initial thoughts on how yo
     setCodeContent(getStarterCode(currentProblemId, language));
   };
 
-  const handleEditorDidMount = (editor, monaco) => {
+  const handleEditorDidMount = (editor) => {
     editorRef.current = editor;
     editor.updateOptions({
       automaticLayout: true,
