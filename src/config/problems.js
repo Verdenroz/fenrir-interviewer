@@ -230,6 +230,117 @@ export const PROBLEM_CONFIGS = {
         { input: "fruits = [1,2,3,2,2]", output: "4" }
       ]
     }
+  },
+
+  "course-schedule-ii": {
+    starterCode: {
+      python: `class Solution(object):
+    def findOrder(self, numCourses, prerequisites):
+        """
+        :type numCourses: int
+        :type prerequisites: List[List[int]]
+        :rtype: List[int]
+        """
+        # Write your solution here
+        `,
+      javascript: `function findOrder(numCourses, prerequisites) {
+    // Write your solution here
+
+}`,
+      java: `public class Solution {
+    public int[] findOrder(int numCourses, int[][] prerequisites) {
+        // Write your solution here
+
+    }
+}`
+    },
+    problemContext: {
+      title: "Course Schedule II",
+      difficulty: "Medium",
+      description: "There are a total of numCourses courses you have to take, labeled from 0 to numCourses - 1. You are given an array prerequisites where prerequisites[i] = [ai, bi] indicates that you must take course bi first if you want to take course ai. Return the ordering of courses you should take to finish all courses. If there are many valid answers, return any of them. If it is impossible to finish all courses, return an empty array.",
+      possibleApproaches: [
+        "Topological Sort with DFS: Use depth-first search with cycle detection and post-order traversal",
+        "Topological Sort with BFS (Kahn's Algorithm): Remove nodes with in-degree 0 iteratively",
+        "Build adjacency graph first, then apply topological ordering algorithm"
+      ],
+      hints: [
+        "This is a topological sort problem - you need to find a valid ordering of courses",
+        "Think about how to detect cycles in the prerequisite graph",
+        "Consider tracking the in-degree (number of prerequisites) for each course",
+        "If there's a cycle, it's impossible to complete all courses",
+        "You can use either DFS with recursion stack or BFS with queue approach"
+      ],
+      acceptableComplexity: {
+        runtime: "O(V + E) - Linear time where V is numCourses and E is prerequisites length",
+        space: "O(V + E) - Space for adjacency list and auxiliary data structures"
+      },
+      possibleSolutions: {
+        dfs: `def findOrder(self, numCourses, prerequisites):
+    # Build adjacency list
+    graph = [[] for _ in range(numCourses)]
+    for course, prereq in prerequisites:
+        graph[prereq].append(course)
+
+    # 0: unvisited, 1: visiting, 2: visited
+    state = [0] * numCourses
+    result = []
+
+    def dfs(course):
+        if state[course] == 1:  # cycle detected
+            return False
+        if state[course] == 2:  # already processed
+            return True
+
+        state[course] = 1  # mark as visiting
+        for next_course in graph[course]:
+            if not dfs(next_course):
+                return False
+
+        state[course] = 2  # mark as visited
+        result.append(course)
+        return True
+
+    for course in range(numCourses):
+        if state[course] == 0:
+            if not dfs(course):
+                return []
+
+    return result[::-1]`,
+        bfs: `def findOrder(self, numCourses, prerequisites):
+    from collections import deque, defaultdict
+
+    # Build graph and in-degree array
+    graph = defaultdict(list)
+    in_degree = [0] * numCourses
+
+    for course, prereq in prerequisites:
+        graph[prereq].append(course)
+        in_degree[course] += 1
+
+    # Start with courses having no prerequisites
+    queue = deque([i for i in range(numCourses) if in_degree[i] == 0])
+    result = []
+
+    while queue:
+        course = queue.popleft()
+        result.append(course)
+
+        # Remove this course and decrease in-degree of dependent courses
+        for next_course in graph[course]:
+            in_degree[next_course] -= 1
+            if in_degree[next_course] == 0:
+                queue.append(next_course)
+
+    # Check if all courses can be taken (no cycles)
+    return result if len(result) == numCourses else []`
+      },
+      testCases: [
+        { input: "numCourses = 2, prerequisites = [[1,0]]", output: "[0,1]" },
+        { input: "numCourses = 4, prerequisites = [[1,0],[2,0],[3,1],[3,2]]", output: "[0,2,1,3] or [0,1,2,3]" },
+        { input: "numCourses = 1, prerequisites = []", output: "[0]" },
+        { input: "numCourses = 3, prerequisites = [[1,0],[1,2],[0,1]]", output: "[] (cycle exists)" }
+      ]
+    }
   }
 };
 
