@@ -1,6 +1,42 @@
 // Interview Problem Configurations
 // Each problem includes context, starter code, and interviewer prompt data
 
+// Types for problem configuration
+export interface TestCase {
+  input: string;
+  output: string;
+  explanation?: string;
+}
+
+export interface ProblemContext {
+  title: string;
+  difficulty: string;
+  description: string;
+  possibleApproaches: string[];
+  hints: string[];
+  acceptableComplexity: {
+    runtime: string;
+    space: string;
+  };
+  possibleSolutions: Record<string, string>;
+  testCases: TestCase[];
+}
+
+export interface StarterCode {
+  python: string;
+  javascript: string;
+  java: string;
+}
+
+export interface ProblemConfig {
+  starterCode: StarterCode;
+  problemContext: ProblemContext;
+}
+
+export type ProblemId = keyof typeof PROBLEM_CONFIGS;
+
+export type Language = keyof StarterCode;
+
 export const PROBLEM_CONFIGS = {
   "two-sum": {
     starterCode: {
@@ -348,29 +384,29 @@ export const PROBLEM_CONFIGS = {
 export const DEFAULT_PROBLEM_ID = "two-sum";
 
 // Get problem configuration by ID
-export function getProblemConfig(problemId = DEFAULT_PROBLEM_ID) {
-  return PROBLEM_CONFIGS[problemId] || PROBLEM_CONFIGS[DEFAULT_PROBLEM_ID];
+export function getProblemConfig(problemId: string = DEFAULT_PROBLEM_ID): ProblemConfig {
+  return PROBLEM_CONFIGS[problemId as ProblemId] || PROBLEM_CONFIGS[DEFAULT_PROBLEM_ID];
 }
 
 // Get starter code for a specific problem and language
-export function getStarterCode(problemId = DEFAULT_PROBLEM_ID, language = 'python') {
+export function getStarterCode(problemId: string = DEFAULT_PROBLEM_ID, language: Language = 'python'): string {
   const config = getProblemConfig(problemId);
   return config.starterCode[language] || config.starterCode.python;
 }
 
 // Get problem context for API calls
-export function getProblemContext(problemId = DEFAULT_PROBLEM_ID) {
+export function getProblemContext(problemId: string = DEFAULT_PROBLEM_ID): ProblemContext {
   const config = getProblemConfig(problemId);
   return config.problemContext;
 }
 
 // Get all available problem IDs
-export function getAvailableProblems() {
+export function getAvailableProblems(): string[] {
   return Object.keys(PROBLEM_CONFIGS);
 }
 
 // Get problem display name
-export function getProblemDisplayName(problemId) {
+export function getProblemDisplayName(problemId: string): string {
   const config = getProblemConfig(problemId);
   return `${config.problemContext.title} - ${config.problemContext.difficulty}`;
 }

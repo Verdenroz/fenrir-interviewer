@@ -1,8 +1,45 @@
 'use client';
 
-import { useState, useRef, useEffect, useCallback } from 'react';
+import React, { useState, useRef, useEffect, useCallback } from 'react';
 import Editor from '@monaco-editor/react';
-import { getProblemConfig, getStarterCode, getProblemContext, getAvailableProblems, getProblemDisplayName } from '@/config/problems';
+import { getProblemConfig, getStarterCode, getProblemContext, getAvailableProblems, getProblemDisplayName, type Language } from '@/config/problems';
+
+// Types for conversation
+interface ConversationMessage {
+  role: 'user' | 'assistant';
+  content: string;
+  timestamp: number;
+}
+
+// Types for WebSocket events
+interface WebSocketPartialTranscript {
+  type: 'PartialTranscript';
+  text: string;
+}
+
+interface WebSocketTurn {
+  type: 'Turn';
+  turn_order: number;
+  transcript: string;
+}
+
+type WebSocketMessage = WebSocketPartialTranscript | WebSocketTurn;
+
+// Types for transcript buffer
+type TranscriptBuffer = Record<number, string>;
+
+// Types for Monaco Editor
+interface MonacoEditor {
+  updateOptions: (options: any) => void;
+}
+
+// Types for mic button state
+interface MicButtonState {
+  icon: string;
+  color: string;
+  text: string;
+  disabled: boolean;
+}
 
 const CONVERSATION_STATES = {
   READY: 'ready',
@@ -16,27 +53,27 @@ export default function Home() {
   const [conversationState, setConversationState] = useState(CONVERSATION_STATES.READY);
   const [currentUserMessage, setCurrentUserMessage] = useState('');
   const [partialTranscript, setPartialTranscript] = useState('');
-  const [conversationHistory, setConversationHistory] = useState([]);
-  const [error, setError] = useState(null);
+  const [conversationHistory, setConversationHistory] = useState<ConversationMessage[]>([]);
+  const [error, setError] = useState<string | null>(null);
   const [hasStartedInterview, setHasStartedInterview] = useState(false);
 
   // Problem selection state
   const [currentProblemId, setCurrentProblemId] = useState('two-sum');
-  const [currentLanguage, setCurrentLanguage] = useState('python');
+  const [currentLanguage, setCurrentLanguage] = useState<Language>('python');
 
   // Code editor state
   const [codeContent, setCodeContent] = useState(() => getStarterCode('two-sum', 'python'));
 
   // Refs for voice functionality
-  const socketRef = useRef(null);
-  const mediaStreamRef = useRef(null);
-  const scriptProcessorRef = useRef(null);
-  const audioContextRef = useRef(null);
-  const audioSourceRef = useRef(null);
+  const socketRef = useRef<WebSocket | null>(null);
+  const mediaStreamRef = useRef<MediaStream | null>(null);
+  const scriptProcessorRef = useRef<ScriptProcessorNode | null>(null);
+  const audioContextRef = useRef<AudioContext | null>(null);
+  const audioSourceRef = useRef<AudioBufferSourceNode | null>(null);
   const conversationStateRef = useRef(conversationState);
-  const editorRef = useRef(null);
-  const silenceTimeoutRef = useRef(null);
-  const transcriptBufferRef = useRef({});
+  const editorRef = useRef<MonacoEditor | null>(null);
+  const silenceTimeoutRef = useRef<NodeJS.Timeout | null>(null);
+  const transcriptBufferRef = useRef<TranscriptBuffer>({});
 
   // Keep conversation state ref in sync
   useEffect(() => {
@@ -48,7 +85,7 @@ export default function Home() {
 
 To get started, could you please walk me through your initial thoughts on how you might approach this problem? Don't worry about writing code yet - I'm just interested in hearing your thought process and any strategices that come to mind.`;
 
-    const aiMessage = { role: 'assistant', content: welcomeMessage, timestamp: Date.now() };
+    const aiMessage: ConversationMessage = { role: 'assistant', content: welcomeMessage, timestamp: Date.now() };
     setConversationHistory([aiMessage]);
 
     // Set state to ready immediately
@@ -84,7 +121,7 @@ To get started, could you please walk me through your initial thoughts on how yo
     }
   }, []);
 
-  const playAudioResponse = useCallback(async (audioBlob) => {
+  const playAudioResponse = useCallback(async (audioBlob: Blob) => {
     try {
       setConversationState(CONVERSATION_STATES.AI_SPEAKING);
 
@@ -154,12 +191,13 @@ To get started, could you please walk me through your initial thoughts on how yo
 
     } catch (error) {
       console.error('Error playing audio:', error);
-      setError('Failed to play audio response: ' + error.message);
+      const message = error instanceof Error ? error.message : 'Unknown error';
+      setError('Failed to play audio response: ' + message);
       setConversationState(CONVERSATION_STATES.READY);
     }
   }, []);
 
-  const generateAiResponse = useCallback(async (userInput) => {
+  const generateAiResponse = useCallback(async (userInput: string) => {
     if (!userInput.trim()) return;
 
     try {
@@ -168,7 +206,7 @@ To get started, could you please walk me through your initial thoughts on how yo
       setPartialTranscript('');
       setConversationState(CONVERSATION_STATES.AI_SPEAKING);
 
-      const userMessage = { role: 'user', content: userInput, timestamp: Date.now() };
+      const userMessage: ConversationMessage = { role: 'user', content: userInput, timestamp: Date.now() };
       setConversationHistory(prev => [...prev, userMessage]);
 
       const response = await fetch('/api/interview/generate', {
@@ -192,7 +230,7 @@ To get started, could you please walk me through your initial thoughts on how yo
       const data = await response.json();
       const responseText = data.text || 'I understand. Please continue.';
 
-      const aiMessage = { role: 'assistant', content: responseText, timestamp: Date.now() };
+      const aiMessage: ConversationMessage = { role: 'assistant', content: responseText, timestamp: Date.now() };
       setConversationHistory(prev => [...prev, aiMessage]);
 
       let responseAudio = null;
@@ -213,10 +251,57 @@ To get started, could you please walk me through your initial thoughts on how yo
 
     } catch (error) {
       console.error('Error generating AI response:', error);
-      setError('Failed to generate response: ' + error.message);
+      const message = error instanceof Error ? error.message : 'Unknown error';
+      setError('Failed to generate response: ' + message);
       setConversationState(CONVERSATION_STATES.READY);
     }
-  }, [conversationHistory, codeContent, currentProblemId, currentLanguage]);
+  }, [conversationHistory, codeContent, currentProblemId, currentLanguage, playAudioResponse]);
+
+  const stopListening = useCallback(async () => {
+    try {
+      // Clear silence timeout
+      if (silenceTimeoutRef.current) {
+        clearTimeout(silenceTimeoutRef.current);
+        silenceTimeoutRef.current = null;
+      }
+
+      // Only change state if we're currently listening
+      if (conversationStateRef.current === CONVERSATION_STATES.LISTENING) {
+        setConversationState(CONVERSATION_STATES.READY);
+      }
+
+      // Close WebSocket
+      if (socketRef.current) {
+        if (socketRef.current.readyState === WebSocket.OPEN) {
+          socketRef.current.send(JSON.stringify({ type: 'Terminate' }));
+        }
+        socketRef.current.close();
+        socketRef.current = null;
+      }
+
+      // Clean up audio processing
+      if (scriptProcessorRef.current) {
+        scriptProcessorRef.current.disconnect();
+        scriptProcessorRef.current = null;
+      }
+
+      if (audioContextRef.current && audioContextRef.current.state !== 'closed') {
+        await audioContextRef.current.close();
+        audioContextRef.current = null;
+      }
+
+      if (mediaStreamRef.current) {
+        mediaStreamRef.current.getTracks().forEach((track: MediaStreamTrack) => track.stop());
+        mediaStreamRef.current = null;
+      }
+
+      // Clear transcript buffer
+      transcriptBufferRef.current = {};
+
+    } catch (error) {
+      console.error('Error stopping listening:', error);
+    }
+  }, []);
 
   const startListening = useCallback(async () => {
     try {
@@ -231,7 +316,7 @@ To get started, could you please walk me through your initial thoughts on how yo
       let accumulatedTranscript = '';
 
       socketRef.current.onopen = async () => {
-        console.log('WebSocket connection established, readyState:', socketRef.current.readyState);
+        console.log('WebSocket connection established, readyState:', socketRef.current?.readyState);
 
         // Set up microphone
         mediaStreamRef.current = await navigator.mediaDevices.getUserMedia({
@@ -311,8 +396,8 @@ To get started, could you please walk me through your initial thoughts on how yo
         };
       };
 
-      socketRef.current.onmessage = (event) => {
-        const message = JSON.parse(event.data);
+      socketRef.current.onmessage = (event: MessageEvent) => {
+        const message: WebSocketMessage = JSON.parse(event.data);
 
         if (conversationStateRef.current !== CONVERSATION_STATES.LISTENING) {
           return;
@@ -328,14 +413,14 @@ To get started, could you please walk me through your initial thoughts on how yo
           }
         }
 
-        if (message.type === 'Turn' && message.transcript) {
+        if (message.type === 'Turn' && 'transcript' in message) {
           const { turn_order, transcript } = message;
           transcriptBufferRef.current[turn_order] = transcript;
 
           // Build the complete transcript from all turns
           const orderedTranscript = Object.keys(transcriptBufferRef.current)
             .sort((a, b) => Number(a) - Number(b))
-            .map((k) => transcriptBufferRef.current[k])
+            .map((k) => transcriptBufferRef.current[Number(k)])
             .join(' ');
 
           accumulatedTranscript = orderedTranscript;
@@ -356,13 +441,13 @@ To get started, could you please walk me through your initial thoughts on how yo
         }
       };
 
-      socketRef.current.onerror = (err) => {
+      socketRef.current.onerror = (err: Event) => {
         console.error('WebSocket error:', err);
         setError('WebSocket connection error');
         stopListening();
       };
 
-      socketRef.current.onclose = (event) => {
+      socketRef.current.onclose = (event: CloseEvent) => {
         console.log('WebSocket closed. Code:', event.code, 'Reason:', event.reason, 'Was clean:', event.wasClean);
         // Only show error for unexpected closures (not normal closure codes)
         if (event.code !== 1000 && event.code !== 1005 && event.code !== 1001) {
@@ -373,56 +458,11 @@ To get started, could you please walk me through your initial thoughts on how yo
 
     } catch (error) {
       console.error('Error starting listening:', error);
-      setError('Failed to start listening: ' + error.message);
+      const message = error instanceof Error ? error.message : 'Unknown error';
+      setError('Failed to start listening: ' + message);
       setConversationState(CONVERSATION_STATES.READY);
     }
-  }, [getToken, generateAiResponse]);
-
-  const stopListening = useCallback(async () => {
-    try {
-      // Clear silence timeout
-      if (silenceTimeoutRef.current) {
-        clearTimeout(silenceTimeoutRef.current);
-        silenceTimeoutRef.current = null;
-      }
-
-      // Only change state if we're currently listening
-      if (conversationStateRef.current === CONVERSATION_STATES.LISTENING) {
-        setConversationState(CONVERSATION_STATES.READY);
-      }
-
-      // Close WebSocket
-      if (socketRef.current) {
-        if (socketRef.current.readyState === WebSocket.OPEN) {
-          socketRef.current.send(JSON.stringify({ type: 'Terminate' }));
-        }
-        socketRef.current.close();
-        socketRef.current = null;
-      }
-
-      // Clean up audio processing
-      if (scriptProcessorRef.current) {
-        scriptProcessorRef.current.disconnect();
-        scriptProcessorRef.current = null;
-      }
-
-      if (audioContextRef.current && audioContextRef.current.state !== 'closed') {
-        await audioContextRef.current.close();
-        audioContextRef.current = null;
-      }
-
-      if (mediaStreamRef.current) {
-        mediaStreamRef.current.getTracks().forEach(track => track.stop());
-        mediaStreamRef.current = null;
-      }
-
-      // Clear transcript buffer
-      transcriptBufferRef.current = {};
-
-    } catch (error) {
-      console.error('Error stopping listening:', error);
-    }
-  }, []);
+  }, [getToken, generateAiResponse, stopListening]);
 
   const toggleMicrophone = useCallback(() => {
     if (conversationState === CONVERSATION_STATES.LISTENING) {
@@ -432,23 +472,23 @@ To get started, could you please walk me through your initial thoughts on how yo
     }
   }, [conversationState, startListening, stopListening]);
 
-  const handleEditorChange = (value) => {
+  const handleEditorChange = (value: string | undefined) => {
     setCodeContent(value || '');
   };
 
-  const handleProblemChange = (problemId) => {
+  const handleProblemChange = (problemId: string) => {
     setCurrentProblemId(problemId);
     setCodeContent(getStarterCode(problemId, currentLanguage));
     setConversationHistory([]);
     setHasStartedInterview(false);
   };
 
-  const handleLanguageChange = (language) => {
+  const handleLanguageChange = (language: Language) => {
     setCurrentLanguage(language);
     setCodeContent(getStarterCode(currentProblemId, language));
   };
 
-  const handleEditorDidMount = (editor) => {
+  const handleEditorDidMount = (editor: MonacoEditor) => {
     editorRef.current = editor;
     editor.updateOptions({
       automaticLayout: true,
@@ -463,7 +503,7 @@ To get started, could you please walk me through your initial thoughts on how yo
     });
   };
 
-  const getMicButtonState = () => {
+  const getMicButtonState = (): MicButtonState => {
     switch (conversationState) {
       case CONVERSATION_STATES.LISTENING:
         return {
@@ -541,7 +581,7 @@ To get started, could you please walk me through your initial thoughts on how yo
             {getProblemContext(currentProblemId).description}
           </p>
 
-          {getProblemContext(currentProblemId).testCases?.slice(0, 2).map((testCase, index) => (
+          {getProblemContext(currentProblemId).testCases?.slice(0, 2).map((testCase: any, index: number) => (
             <div key={index} className="example">
               <strong>Example {index + 1}:</strong>
               <p>
@@ -560,7 +600,7 @@ To get started, could you please walk me through your initial thoughts on how yo
             <div className="language-controls">
               <select
                 value={currentLanguage}
-                onChange={(e) => handleLanguageChange(e.target.value)}
+                onChange={(e) => handleLanguageChange(e.target.value as Language)}
                 className="language-selector"
               >
                 <option value="python">Python</option>
@@ -617,7 +657,7 @@ To get started, could you please walk me through your initial thoughts on how yo
             </div>
           ) : (
             <div className="chat-messages">
-              {conversationHistory.map((message, index) => (
+              {conversationHistory.map((message: ConversationMessage, index: number) => (
                 <div key={index} className={`message ${message.role === 'user' ? 'user' : 'assistant'}`}>
                   <div className="message-label">
                     {message.role === 'user' ? 'You' : 'Fenrir'}
