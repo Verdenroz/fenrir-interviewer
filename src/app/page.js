@@ -69,6 +69,7 @@ export default function Home() {
   const [partialTranscript, setPartialTranscript] = useState('');
   const [conversationHistory, setConversationHistory] = useState([]);
   const [error, setError] = useState(null);
+  const [hasStartedInterview, setHasStartedInterview] = useState(false);
 
   // Code editor state
   const [codeContent, setCodeContent] = useState(TWO_SUM_STARTER_CODE);
@@ -86,6 +87,55 @@ export default function Home() {
   useEffect(() => {
     conversationStateRef.current = conversationState;
   }, [conversationState]);
+
+  // Start interview immediately on component mount
+  useEffect(() => {
+    if (!hasStartedInterview) {
+      startInterview();
+      setHasStartedInterview(true);
+    }
+  }, [hasStartedInterview]);
+
+  const startInterview = useCallback(async () => {
+    const welcomeMessage = "Welcome! To start, could you please walk me through your initial thoughts on how you might approach this problem? How would you typically go about finding two numbers that add up to a specific target?";
+    
+    const aiMessage = { role: 'assistant', content: welcomeMessage, timestamp: Date.now() };
+    setConversationHistory([aiMessage]);
+    
+    // Generate and play the welcome audio
+    try {
+      const response = await fetch('/api/interview/generate', {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+        },
+        body: JSON.stringify({
+          userInput: 'START_INTERVIEW',
+          conversationHistory: [],
+          problemContext: TWO_SUM_PROBLEM_CONTEXT,
+          currentCode: codeContent,
+          language: 'python'
+        })
+      });
+
+      if (response.ok) {
+        const data = await response.json();
+        if (data.audio) {
+          const binaryString = atob(data.audio);
+          const bytes = new Uint8Array(binaryString.length);
+          for (let i = 0; i < binaryString.length; i++) {
+            bytes[i] = binaryString.charCodeAt(i);
+          }
+          const responseAudio = new Blob([bytes], { type: 'audio/wav' });
+          await playAudioResponse(responseAudio);
+        }
+      }
+    } catch (error) {
+      console.error('Error starting interview:', error);
+      // Continue without audio if it fails
+      setConversationState(CONVERSATION_STATES.READY);
+    }
+  }, [codeContent]);
 
   const getToken = useCallback(async () => {
     try {
@@ -112,11 +162,13 @@ export default function Home() {
     if (!userInput.trim()) return;
 
     try {
+      // Clear user message states immediately when AI starts responding
+      setCurrentUserMessage('');
+      setPartialTranscript('');
       setConversationState(CONVERSATION_STATES.AI_SPEAKING);
 
       const userMessage = { role: 'user', content: userInput, timestamp: Date.now() };
       setConversationHistory(prev => [...prev, userMessage]);
-      setCurrentUserMessage('');
 
       const response = await fetch('/api/interview/generate', {
         method: 'POST',
@@ -163,7 +215,7 @@ export default function Home() {
       setError('Failed to generate response: ' + error.message);
       setConversationState(CONVERSATION_STATES.READY);
     }
-  }, [conversationHistory]);
+  }, [conversationHistory, codeContent]);
 
   const playAudioResponse = useCallback(async (audioBlob) => {
     try {
@@ -225,28 +277,58 @@ export default function Home() {
 
       const transcriber = new RealtimeTranscriber({
         token: token,
-        sampleRate: 16000
+        sampleRate: 16000,
+        endOfTurnSilenceThreshold: 1500,
+        endOfTurnConfidenceThreshold: 0.9
       });
 
       transcriber.on('open', ({ id }) => {
         console.log('Transcriber session opened:', id);
       });
 
+      let finalTranscriptTimeout = null;
+      let endOfTurnDetected = false;
+      let accumulatedTranscript = '';
+
       transcriber.on('transcript', (transcriptData) => {
+        // Only process transcripts if we're still in listening state
+        if (conversationStateRef.current !== CONVERSATION_STATES.LISTENING) {
+          return;
+        }
+
         if (transcriptData.message_type === 'FinalTranscript' && transcriptData.text) {
           const finalText = transcriptData.text.trim();
-          setCurrentUserMessage(prev => (prev + ' ' + finalText).trim());
+          accumulatedTranscript = (accumulatedTranscript + ' ' + finalText).trim();
+          setCurrentUserMessage(accumulatedTranscript);
           setPartialTranscript('');
 
-          setTimeout(() => {
+          // Clear any existing timeout
+          if (finalTranscriptTimeout) {
+            clearTimeout(finalTranscriptTimeout);
+          }
+
+          // Check if this is end of turn from AssemblyAI's detection
+          if (transcriptData.end_of_turn) {
+            endOfTurnDetected = true;
+            // Process the final message
             if (conversationStateRef.current === CONVERSATION_STATES.LISTENING) {
               stopListening();
-              generateAiResponse((currentUserMessage + ' ' + finalText).trim());
+              generateAiResponse(accumulatedTranscript);
             }
-          }, 2000);
+          } else {
+            // Set a longer fallback timeout for cases where end_of_turn isn't detected
+            finalTranscriptTimeout = setTimeout(() => {
+              if (conversationStateRef.current === CONVERSATION_STATES.LISTENING && !endOfTurnDetected) {
+                stopListening();
+                generateAiResponse(accumulatedTranscript);
+              }
+            }, 4000); // Increased timeout to 4 seconds
+          }
 
         } else if (transcriptData.message_type === 'PartialTranscript' && transcriptData.text) {
           setPartialTranscript(transcriptData.text);
+          // Reset end of turn flag when we get new partial transcript
+          endOfTurnDetected = false;
         }
       });
 
@@ -263,7 +345,8 @@ export default function Home() {
         audio: {
           channelCount: 1,
           echoCancellation: true,
-          noiseSuppression: true
+          noiseSuppression: true,
+          autoGainControl: true // Added for better audio quality
         }
       });
       streamRef.current = stream;
@@ -333,11 +416,14 @@ export default function Home() {
       setError('Failed to start listening: ' + error.message);
       setConversationState(CONVERSATION_STATES.READY);
     }
-  }, [getToken, generateAiResponse, conversationState]);
+  }, [getToken, generateAiResponse]);
 
   const stopListening = useCallback(async () => {
     try {
-      setConversationState(CONVERSATION_STATES.READY);
+      // Only change state if we're currently listening
+      if (conversationStateRef.current === CONVERSATION_STATES.LISTENING) {
+        setConversationState(CONVERSATION_STATES.READY);
+      }
 
       if (transcriberRef.current) {
         await transcriberRef.current.close();
@@ -428,6 +514,7 @@ export default function Home() {
     setCurrentUserMessage('');
     setPartialTranscript('');
     setError(null);
+    setHasStartedInterview(false);
     stopListening();
   };
 
@@ -525,8 +612,8 @@ export default function Home() {
           {conversationHistory.length === 0 ? (
             <div className="chat-empty">
               <div className="empty-icon">💬</div>
-              <p>Click the microphone to start your interview conversation</p>
-              <p className="empty-subtitle">The AI will guide you through the Two Sum problem</p>
+              <p>Starting interview...</p>
+              <p className="empty-subtitle">The AI interviewer will begin shortly</p>
             </div>
           ) : (
             <div className="chat-messages">
@@ -541,8 +628,8 @@ export default function Home() {
             </div>
           )}
 
-          {/* Current Speaking State */}
-          {(currentUserMessage || partialTranscript) && (
+          {/* Current Speaking State - Only show when listening and not when AI is speaking */}
+          {conversationState === CONVERSATION_STATES.LISTENING && (currentUserMessage || partialTranscript) && (
             <div className="message user speaking">
               <div className="message-label">You (speaking...)</div>
               <div className="message-content">
