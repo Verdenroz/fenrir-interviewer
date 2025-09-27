@@ -227,8 +227,8 @@ To get started, could you please walk me through your initial thoughts on how yo
       const transcriber = new RealtimeTranscriber({
         token: token,
         sampleRate: 16000,
-        endOfTurnSilenceThreshold: 1500,
-        endOfTurnConfidenceThreshold: 0.9
+        endOfTurnSilenceThreshold: 3500,
+        endOfTurnConfidenceThreshold: 0.7
       });
 
       transcriber.on('open', ({ id }) => {
@@ -236,6 +236,7 @@ To get started, could you please walk me through your initial thoughts on how yo
       });
 
       let finalTranscriptTimeout = null;
+      let endOfTurnDebounceTimeout = null;
       let endOfTurnDetected = false;
       let accumulatedTranscript = '';
 
@@ -258,12 +259,19 @@ To get started, could you please walk me through your initial thoughts on how yo
 
           // Check if this is end of turn from AssemblyAI's detection
           if (transcriptData.end_of_turn) {
-            endOfTurnDetected = true;
-            // Process the final message
-            if (conversationStateRef.current === CONVERSATION_STATES.LISTENING) {
-              stopListening();
-              generateAiResponse(accumulatedTranscript);
+            // Clear any existing debounce timeout
+            if (endOfTurnDebounceTimeout) {
+              clearTimeout(endOfTurnDebounceTimeout);
             }
+
+            // Wait a bit longer after end-of-turn to see if user continues speaking
+            endOfTurnDebounceTimeout = setTimeout(() => {
+              if (conversationStateRef.current === CONVERSATION_STATES.LISTENING && !endOfTurnDetected) {
+                endOfTurnDetected = true;
+                stopListening();
+                generateAiResponse(accumulatedTranscript);
+              }
+            }, 1500); // Wait 1.5 seconds after end-of-turn detection
           } else {
             // Set a longer fallback timeout for cases where end_of_turn isn't detected
             finalTranscriptTimeout = setTimeout(() => {
@@ -271,13 +279,17 @@ To get started, could you please walk me through your initial thoughts on how yo
                 stopListening();
                 generateAiResponse(accumulatedTranscript);
               }
-            }, 4000); // Increased timeout to 4 seconds
+            }, 6000); // Increased timeout to 6 seconds
           }
 
         } else if (transcriptData.message_type === 'PartialTranscript' && transcriptData.text) {
           setPartialTranscript(transcriptData.text);
-          // Reset end of turn flag when we get new partial transcript
+          // Reset end of turn flag and clear debounce when we get new partial transcript
           endOfTurnDetected = false;
+          if (endOfTurnDebounceTimeout) {
+            clearTimeout(endOfTurnDebounceTimeout);
+            endOfTurnDebounceTimeout = null;
+          }
         }
       });
 
