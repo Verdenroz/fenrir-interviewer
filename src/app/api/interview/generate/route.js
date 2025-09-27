@@ -1,5 +1,6 @@
 import { GoogleGenAI } from '@google/genai';
 import { NextResponse } from 'next/server';
+import { getProblemContext } from '../utils/problems.js';
 
 // Helper function to create WAV header for PCM data
 function createWavHeader(dataLength, sampleRate = 24000, channels = 1, bitsPerSample = 16) {
@@ -36,7 +37,7 @@ function createWavHeader(dataLength, sampleRate = 24000, channels = 1, bitsPerSa
 
 export async function POST(request) {
   try {
-    const { userInput, conversationHistory } = await request.json();
+    const { userInput, conversationHistory, problemContext, currentCode, language = 'python' } = await request.json();
 
     if (!userInput) {
       return NextResponse.json(
@@ -49,26 +50,54 @@ export async function POST(request) {
       apiKey: process.env.GEMINI_API_KEY
     });
 
-    const generateConversationPrompt = (input, history) => {
-      const basePrompt = `You are a helpful AI interview assistant having a natural conversation. Be conversational, professional, and engaging.
+    const generateConversationPrompt = (input, history, problemContext, currentCode, language) => {
+      // Get problem context from external mapping
+      const context = problemContext || getProblemContext();
 
-Your role:
-- Ask thoughtful questions about their background, experience, and goals
-- Provide helpful feedback and encouragement
-- Keep the conversation flowing naturally
-- Focus on understanding the person and their aspirations
-- Ask follow-up questions based on their responses
+      const basePrompt = `You are an AI technical interviewer conducting a coding interview. You are helping the candidate solve the "${context.title}" problem.
 
-Conversation History: ${history.map(h => `${h.role}: ${h.content}`).join('\n')}
+PROBLEM CONTEXT:
+- Title: ${context.title} (${context.difficulty})
+- Description: ${context.description}
 
-User: "${input}"
+POSSIBLE APPROACHES:
+${(context.possibleApproaches || context.approaches || []).map(approach => `- ${approach}`).join('\n')}
 
-Respond naturally and conversationally. Keep responses under 80 words and make them sound natural when spoken aloud.`;
+HINTS TO GUIDE CANDIDATE:
+${(context.hints || []).map(hint => `- ${hint}`).join('\n')}
+
+ACCEPTABLE COMPLEXITY:
+- Runtime: ${context.acceptableComplexity?.runtime || 'Not specified'}
+- Space: ${context.acceptableComplexity?.space || 'Not specified'}
+
+POSSIBLE SOLUTIONS:
+Available for reference but don't give away immediately
+
+CURRENT CODE FROM CANDIDATE:
+\`\`\`${language}
+${currentCode || 'No code written yet'}
+\`\`\`
+
+YOUR ROLE AS INTERVIEWER:
+- Guide the candidate through the problem-solving process
+- Ask probing questions about their approach and thinking
+- Provide hints when they're stuck (don't give away the solution immediately)
+- Comment on their current code if they've written any
+- Encourage good practices like thinking about edge cases and time complexity
+- Be supportive but maintain the professional interview atmosphere
+- If they seem completely stuck, offer gentle guidance toward a working approach
+
+CONVERSATION HISTORY:
+${history.map(h => `${h.role}: ${h.content}`).join('\n')}
+
+CANDIDATE: "${input}"
+
+Respond as a technical interviewer. Keep responses under 80 words and sound natural when spoken. Focus on guiding their problem-solving process based on their current progress and the code they've written.`;
 
       return basePrompt;
     };
 
-    const prompt = generateConversationPrompt(userInput, conversationHistory || []);
+    const prompt = generateConversationPrompt(userInput, conversationHistory || [], problemContext, currentCode, language);
 
     // Generate text response using regular Gemini model
     const textResponse = await client.models.generateContent({
@@ -109,7 +138,7 @@ Respond naturally and conversationally. Keep responses under 80 words and make t
         console.log('Generated audio response, PCM length:', pcmBuffer.length);
 
         // Check if it's already a WAV file (starts with 'RIFF')
-        const isWav = pcmBuffer.slice(0, 4).toString() === 'RIFF';
+        const isWav = pcmBuffer.subarray(0, 4).toString() === 'RIFF';
 
         if (isWav) {
           // Already a proper WAV file

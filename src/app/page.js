@@ -20,6 +20,48 @@ const TWO_SUM_STARTER_CODE = `class Solution(object):
         # Write your solution here
         `;
 
+const TWO_SUM_PROBLEM_CONTEXT = {
+  title: "Two Sum",
+  difficulty: "Easy",
+  description: "Given an array of integers nums and an integer target, return indices of the two numbers such that they add up to target. You may assume there is exactly one solution.",
+  possibleApproaches: [
+    "Brute Force: O(n²) time, O(1) space - Check every pair of numbers",
+    "Hash Map: O(n) time, O(n) space - Use a hash map to store complements",
+    "Two Pointers: O(n log n) time, O(1) space - Sort array first, then use two pointers (but loses original indices)"
+  ],
+  hints: [
+    "Think about what you need to find for each number - its complement",
+    "Can you store previously seen numbers and their indices somewhere?",
+    "What's the complement of the current number? (target - current_number)",
+    "Have you seen this complement before in your iteration?"
+  ],
+  acceptableComplexity: {
+    runtime: "O(n) - Linear time is expected for optimal solution",
+    space: "O(n) - Hash map storage for seen numbers"
+  },
+  possibleSolutions: {
+    bruteForce: `def twoSum(self, nums, target):
+    for i in range(len(nums)):
+        for j in range(i + 1, len(nums)):
+            if nums[i] + nums[j] == target:
+                return [i, j]
+    return []`,
+    optimal: `def twoSum(self, nums, target):
+    num_map = {}
+    for i, num in enumerate(nums):
+        complement = target - num
+        if complement in num_map:
+            return [num_map[complement], i]
+        num_map[num] = i
+    return []`
+  },
+  testCases: [
+    { input: "nums = [2,7,11,15], target = 9", output: "[0,1]" },
+    { input: "nums = [3,2,4], target = 6", output: "[1,2]" },
+    { input: "nums = [3,3], target = 6", output: "[0,1]" }
+  ]
+};
+
 export default function Home() {
   // Voice interaction state
   const [conversationState, setConversationState] = useState(CONVERSATION_STATES.READY);
@@ -83,7 +125,10 @@ export default function Home() {
         },
         body: JSON.stringify({
           userInput,
-          conversationHistory
+          conversationHistory,
+          problemContext: TWO_SUM_PROBLEM_CONTEXT,
+          currentCode: codeContent,
+          language: 'python'
         })
       });
 
