@@ -1,6 +1,6 @@
 ## Inspiration
 
-We are Team Outcast, named so because we were the last two people to team up. As heavily introverted programmers, we struggled to get proper mock interviews and so we decided on creating "Fenrir", a mock interview buddy that is always available. The name Fenrir came from the favorite voice we picked from Gemini TTS.
+We are Team Outcast, named so because we were the last two people to team up. As heavily introverted programmers, we struggled to get proper mock interviews and so we decided on creating "Fenrir", a mock interview buddy that is always available. The idea fit well into the transformative learning track so we went all in! The name Fenrir came from the favorite voice we picked from Gemini TTS.
 
 ## What it does
 
@@ -41,6 +41,8 @@ Fenrir Interviewer is an AI-powered technical interview platform that conducts r
 **Natural Conversation Flow**: Creating pause detection that feels natural was surprisingly difficult. We implemented a sophisticated debouncing system with 3-second silence timeouts to distinguish between thinking pauses and actual end-of-turn, preventing premature interruptions. 
 
 **Assembly-AI**: Despite how wonderful their realtime transcription turned out, the pain and misery it took to get there was... unspeakable. Too many hours spent debugging, looking through outdated documentation and code. Only to realize, connecting to the websocket manually and reading the API Reference is more convenient. Their SDK is wack!
+
+**High Latency**: We originally tried to lower latency through audio-to-audio processing using Gemini Live, however, we were not able to process the audio within the limited quota of the day. (Only 15 requests per day!) We were quickly rate limited, and so decided on accepting higher latency for more reliability where we use AssemblyAI for STT, then feed transcripts to Google Gemini for TTS. The audio-to-audio flow then became a hacky audio-to-text-to-audio.
 
 ## Accomplishments that we're proud of
 
