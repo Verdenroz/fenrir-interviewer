@@ -46,7 +46,7 @@ export default function Home() {
   const startInterview = useCallback(async () => {
     const welcomeMessage = `Welcome to your coding interview! I'll be helping you work through the "${getProblemDisplayName(currentProblemId)}" problem today.
 
-To get started, could you please walk me through your initial thoughts on how you might approach this problem? Don't worry about writing code yet - I'm just interested in hearing your thought process and any strategies that come to mind.`;
+To get started, could you please walk me through your initial thoughts on how you might approach this problem? Don't worry about writing code yet - I'm just interested in hearing your thought process and any strategices that come to mind.`;
 
     const aiMessage = { role: 'assistant', content: welcomeMessage, timestamp: Date.now() };
     setConversationHistory([aiMessage]);
@@ -613,14 +613,14 @@ To get started, could you please walk me through your initial thoughts on how yo
             <div className="chat-empty">
               <div className="empty-icon">💬</div>
               <p>Starting interview...</p>
-              <p className="empty-subtitle">The AI interviewer will begin shortly</p>
+              <p className="empty-subtitle">Fenrir will begin shortly</p>
             </div>
           ) : (
             <div className="chat-messages">
               {conversationHistory.map((message, index) => (
                 <div key={index} className={`message ${message.role === 'user' ? 'user' : 'assistant'}`}>
                   <div className="message-label">
-                    {message.role === 'user' ? 'You' : 'AI Interviewer'}
+                    {message.role === 'user' ? 'You' : 'Fenrir'}
                   </div>
                   <div className="message-content">{message.content}</div>
                 </div>
