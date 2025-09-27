@@ -48,6 +48,48 @@
     flex-shrink: 0;
   }
 
+  /*selector style*/
+  .problem-selector{
+  background: rgba(255, 255, 255, 0.1);
+  color: #fff;
+  border: 1px solid rgba(255, 255, 255, 0.2);
+  border-radius: 8px;
+  padding: 10px 20px;
+  cursor: pointer;
+  transition: all 0.3s ease;
+  font-size: 14px;
+  font-weight: 500;
+  }
+
+  select.problem-selector option {
+  background: #1b1b1d; /* dark background */
+  color: #fff;         /* white text */
+  padding: 10px;
+  font-size: 14px;
+  font-weight: 500;
+}
+
+.language-selector{
+  background: rgba(255, 255, 255, 0.1);
+  color: #fff;
+  border: 1px solid rgba(255, 255, 255, 0.2);
+  border-radius: 8px;
+  padding: 10px 20px;
+  cursor: pointer;
+  transition: all 0.3s ease;
+  font-size: 14px;
+  font-weight: 500;
+  margin-bottom: 10px;
+  }
+
+  select.language-selector {
+  background: #1b1b1d; /* dark background */
+  color: #fff;         /* white text */
+  padding: 10px;
+  font-size: 14px;
+  font-weight: 500;
+}
+
   .example {
     margin-top:12px;
     background: linear-gradient(180deg, rgba(255,255,255,0.01), rgba(255,255,255,0.005));
