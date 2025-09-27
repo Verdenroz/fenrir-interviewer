@@ -1,7 +1,6 @@
 'use client';
 
 import { useState, useRef, useEffect, useCallback } from 'react';
-import { RealtimeTranscriber } from 'assemblyai';
 import Editor from '@monaco-editor/react';
 import { getProblemConfig, getStarterCode, getProblemContext, getAvailableProblems, getProblemDisplayName } from '@/config/problems';
 
@@ -29,13 +28,15 @@ export default function Home() {
   const [codeContent, setCodeContent] = useState(() => getStarterCode('two-sum', 'python'));
 
   // Refs for voice functionality
-  const transcriberRef = useRef(null);
-  const mediaRecorderRef = useRef(null);
-  const streamRef = useRef(null);
+  const socketRef = useRef(null);
+  const mediaStreamRef = useRef(null);
+  const scriptProcessorRef = useRef(null);
   const audioContextRef = useRef(null);
   const audioSourceRef = useRef(null);
   const conversationStateRef = useRef(conversationState);
   const editorRef = useRef(null);
+  const silenceTimeoutRef = useRef(null);
+  const transcriptBufferRef = useRef({});
 
   // Keep conversation state ref in sync
   useEffect(() => {
@@ -223,154 +224,152 @@ To get started, could you please walk me through your initial thoughts on how yo
       setConversationState(CONVERSATION_STATES.LISTENING);
 
       const token = await getToken();
+      const wsUrl = `wss://streaming.assemblyai.com/v3/ws?sample_rate=16000&formatted_finals=true&token=${token}`;
 
-      const transcriber = new RealtimeTranscriber({
-        token: token,
-        sampleRate: 16000,
-        endOfTurnSilenceThreshold: 3500,
-        endOfTurnConfidenceThreshold: 0.7
-      });
-
-      transcriber.on('open', ({ id }) => {
-        console.log('Transcriber session opened:', id);
-      });
-
-      let finalTranscriptTimeout = null;
-      let endOfTurnDebounceTimeout = null;
-      let endOfTurnDetected = false;
+      socketRef.current = new WebSocket(wsUrl);
+      transcriptBufferRef.current = {};
       let accumulatedTranscript = '';
 
-      transcriber.on('transcript', (transcriptData) => {
-        // Only process transcripts if we're still in listening state
+      socketRef.current.onopen = async () => {
+        console.log('WebSocket connection established, readyState:', socketRef.current.readyState);
+
+        // Set up microphone
+        mediaStreamRef.current = await navigator.mediaDevices.getUserMedia({
+          audio: {
+            channelCount: 1,
+            echoCancellation: true,
+            noiseSuppression: true,
+            autoGainControl: true
+          }
+        });
+
+        audioContextRef.current = new AudioContext();
+        const source = audioContextRef.current.createMediaStreamSource(mediaStreamRef.current);
+
+        // Use scriptProcessor for better compatibility
+        scriptProcessorRef.current = audioContextRef.current.createScriptProcessor(4096, 1, 1);
+
+        source.connect(scriptProcessorRef.current);
+        scriptProcessorRef.current.connect(audioContextRef.current.destination);
+
+        // Calculate resampling parameters
+        const targetSampleRate = 16000;
+        const sourceSampleRate = audioContextRef.current.sampleRate;
+        const resampleRatio = sourceSampleRate / targetSampleRate;
+
+        let audioChunkCount = 0;
+        scriptProcessorRef.current.onaudioprocess = (event) => {
+          if (!socketRef.current || socketRef.current.readyState !== WebSocket.OPEN) {
+            if (audioChunkCount % 100 === 0) console.log('Socket not ready, state:', socketRef.current?.readyState);
+            return;
+          }
+          if (conversationStateRef.current !== CONVERSATION_STATES.LISTENING) return;
+
+          const input = event.inputBuffer.getChannelData(0);
+
+          // Check if we have audio input
+          const hasAudio = input.some(sample => Math.abs(sample) > 0.001);
+          if (!hasAudio && audioChunkCount % 100 === 0) {
+            console.log('No audio detected in chunk', audioChunkCount);
+          }
+
+          // Resample to 16kHz if needed
+          let processedData;
+          if (Math.abs(sourceSampleRate - targetSampleRate) > 100) {
+            // Need to resample
+            const downsampledLength = Math.floor(input.length / resampleRatio);
+            const downsampledData = new Float32Array(downsampledLength);
+
+            for (let i = 0; i < downsampledLength; i++) {
+              const sourceIndex = Math.floor(i * resampleRatio);
+              downsampledData[i] = input[sourceIndex];
+            }
+            processedData = downsampledData;
+            if (audioChunkCount === 0) console.log('Resampling from', sourceSampleRate, 'to', targetSampleRate);
+          } else {
+            // No resampling needed
+            processedData = input;
+            if (audioChunkCount === 0) console.log('No resampling needed, using', sourceSampleRate, 'Hz');
+          }
+
+          // Convert to 16-bit PCM
+          const buffer = new Int16Array(processedData.length);
+          for (let i = 0; i < processedData.length; i++) {
+            buffer[i] = Math.max(-1, Math.min(1, processedData[i])) * 0x7fff;
+          }
+
+          try {
+            socketRef.current.send(buffer.buffer);
+            if (audioChunkCount % 100 === 0) {
+              console.log('Sent audio chunk', audioChunkCount, 'size:', buffer.buffer.byteLength, 'bytes');
+            }
+          } catch (error) {
+            console.error('Error sending audio data:', error);
+          }
+
+          audioChunkCount++;
+        };
+      };
+
+      socketRef.current.onmessage = (event) => {
+        const message = JSON.parse(event.data);
+
         if (conversationStateRef.current !== CONVERSATION_STATES.LISTENING) {
           return;
         }
 
-        if (transcriptData.message_type === 'FinalTranscript' && transcriptData.text) {
-          const finalText = transcriptData.text.trim();
-          accumulatedTranscript = (accumulatedTranscript + ' ' + finalText).trim();
+        if (message.type === 'PartialTranscript' && message.text) {
+          setPartialTranscript(message.text);
+
+          // Clear any existing silence timeout when we get speech
+          if (silenceTimeoutRef.current) {
+            clearTimeout(silenceTimeoutRef.current);
+            silenceTimeoutRef.current = null;
+          }
+        }
+
+        if (message.type === 'Turn' && message.transcript) {
+          const { turn_order, transcript } = message;
+          transcriptBufferRef.current[turn_order] = transcript;
+
+          // Build the complete transcript from all turns
+          const orderedTranscript = Object.keys(transcriptBufferRef.current)
+            .sort((a, b) => Number(a) - Number(b))
+            .map((k) => transcriptBufferRef.current[k])
+            .join(' ');
+
+          accumulatedTranscript = orderedTranscript;
           setCurrentUserMessage(accumulatedTranscript);
           setPartialTranscript('');
 
-          // Clear any existing timeout
-          if (finalTranscriptTimeout) {
-            clearTimeout(finalTranscriptTimeout);
+          // Set a silence timeout - only stop listening after genuine silence
+          if (silenceTimeoutRef.current) {
+            clearTimeout(silenceTimeoutRef.current);
           }
 
-          // Check if this is end of turn from AssemblyAI's detection
-          if (transcriptData.end_of_turn) {
-            // Clear any existing debounce timeout
-            if (endOfTurnDebounceTimeout) {
-              clearTimeout(endOfTurnDebounceTimeout);
+          silenceTimeoutRef.current = setTimeout(() => {
+            if (conversationStateRef.current === CONVERSATION_STATES.LISTENING && accumulatedTranscript.trim()) {
+              stopListening();
+              generateAiResponse(accumulatedTranscript);
             }
-
-            // Wait a bit longer after end-of-turn to see if user continues speaking
-            endOfTurnDebounceTimeout = setTimeout(() => {
-              if (conversationStateRef.current === CONVERSATION_STATES.LISTENING && !endOfTurnDetected) {
-                endOfTurnDetected = true;
-                stopListening();
-                generateAiResponse(accumulatedTranscript);
-              }
-            }, 1500); // Wait 1.5 seconds after end-of-turn detection
-          } else {
-            // Set a longer fallback timeout for cases where end_of_turn isn't detected
-            finalTranscriptTimeout = setTimeout(() => {
-              if (conversationStateRef.current === CONVERSATION_STATES.LISTENING && !endOfTurnDetected) {
-                stopListening();
-                generateAiResponse(accumulatedTranscript);
-              }
-            }, 6000); // Increased timeout to 6 seconds
-          }
-
-        } else if (transcriptData.message_type === 'PartialTranscript' && transcriptData.text) {
-          setPartialTranscript(transcriptData.text);
-          // Reset end of turn flag and clear debounce when we get new partial transcript
-          endOfTurnDetected = false;
-          if (endOfTurnDebounceTimeout) {
-            clearTimeout(endOfTurnDebounceTimeout);
-            endOfTurnDebounceTimeout = null;
-          }
+          }, 3000); // Wait 3 seconds of silence before processing
         }
-      });
+      };
 
-      transcriber.on('error', (error) => {
-        console.error('Transcriber error:', error);
-        setError('Transcription error: ' + error.message);
-        setConversationState(CONVERSATION_STATES.READY);
-      });
+      socketRef.current.onerror = (err) => {
+        console.error('WebSocket error:', err);
+        setError('WebSocket connection error');
+        stopListening();
+      };
 
-      await transcriber.connect();
-      transcriberRef.current = transcriber;
-
-      const stream = await navigator.mediaDevices.getUserMedia({
-        audio: {
-          channelCount: 1,
-          echoCancellation: true,
-          noiseSuppression: true,
-          autoGainControl: true
+      socketRef.current.onclose = (event) => {
+        console.log('WebSocket closed. Code:', event.code, 'Reason:', event.reason, 'Was clean:', event.wasClean);
+        // Only show error for unexpected closures (not normal closure codes)
+        if (event.code !== 1000 && event.code !== 1005 && event.code !== 1001) {
+          setError(`WebSocket closed unexpectedly: ${event.code} - ${event.reason}`);
         }
-      });
-      streamRef.current = stream;
-
-      const audioContext = new AudioContext();
-      const source = audioContext.createMediaStreamSource(stream);
-
-      try {
-        await audioContext.audioWorklet.addModule('/audio-processor.js');
-        const workletNode = new AudioWorkletNode(audioContext, 'audio-processor');
-
-        workletNode.port.onmessage = (event) => {
-          if (event.data.type === 'audioData' && transcriberRef.current) {
-            if (conversationStateRef.current === CONVERSATION_STATES.LISTENING) {
-              transcriberRef.current.sendAudio(event.data.data);
-            }
-          }
-        };
-
-        source.connect(workletNode);
-        workletNode.connect(audioContext.destination);
-
-        mediaRecorderRef.current = { audioContext, source, workletNode };
-
-      } catch (workletError) {
-        const bufferSize = 1024;
-        const processor = audioContext.createScriptProcessor(bufferSize, 1, 1);
-
-        const targetSampleRate = 16000;
-        const sourceSampleRate = audioContext.sampleRate;
-        const resampleRatio = sourceSampleRate / targetSampleRate;
-
-        const processAudio = (event) => {
-          if (transcriberRef.current) {
-            const inputBuffer = event.inputBuffer;
-            const inputData = inputBuffer.getChannelData(0);
-
-            if (conversationStateRef.current === CONVERSATION_STATES.LISTENING) {
-              const downsampledLength = Math.floor(inputData.length / resampleRatio);
-              const downsampledData = new Float32Array(downsampledLength);
-
-              for (let i = 0; i < downsampledLength; i++) {
-                const sourceIndex = Math.floor(i * resampleRatio);
-                downsampledData[i] = inputData[sourceIndex];
-              }
-
-              const pcmData = new Int16Array(downsampledLength);
-              for (let i = 0; i < downsampledLength; i++) {
-                pcmData[i] = Math.max(-32768, Math.min(32767, downsampledData[i] * 32768));
-              }
-
-              transcriberRef.current.sendAudio(pcmData.buffer);
-            }
-          }
-        };
-
-        processor.addEventListener('audioprocess', processAudio);
-
-        source.connect(processor);
-        processor.connect(audioContext.destination);
-
-        mediaRecorderRef.current = { audioContext, source, processor };
-      }
+        socketRef.current = null;
+      };
 
     } catch (error) {
       console.error('Error starting listening:', error);
@@ -381,37 +380,45 @@ To get started, could you please walk me through your initial thoughts on how yo
 
   const stopListening = useCallback(async () => {
     try {
+      // Clear silence timeout
+      if (silenceTimeoutRef.current) {
+        clearTimeout(silenceTimeoutRef.current);
+        silenceTimeoutRef.current = null;
+      }
+
       // Only change state if we're currently listening
       if (conversationStateRef.current === CONVERSATION_STATES.LISTENING) {
         setConversationState(CONVERSATION_STATES.READY);
       }
 
-      if (transcriberRef.current) {
-        await transcriberRef.current.close();
-        transcriberRef.current = null;
-      }
-
-      if (mediaRecorderRef.current) {
-        const { audioContext, source, processor, workletNode } = mediaRecorderRef.current;
-
-        if (workletNode) {
-          source.disconnect(workletNode);
-          workletNode.disconnect(audioContext.destination);
-        } else if (processor) {
-          source.disconnect(processor);
-          processor.disconnect(audioContext.destination);
+      // Close WebSocket
+      if (socketRef.current) {
+        if (socketRef.current.readyState === WebSocket.OPEN) {
+          socketRef.current.send(JSON.stringify({ type: 'Terminate' }));
         }
-
-        if (audioContext && audioContext.state !== 'closed') {
-          await audioContext.close();
-        }
-        mediaRecorderRef.current = null;
+        socketRef.current.close();
+        socketRef.current = null;
       }
 
-      if (streamRef.current) {
-        streamRef.current.getTracks().forEach(track => track.stop());
-        streamRef.current = null;
+      // Clean up audio processing
+      if (scriptProcessorRef.current) {
+        scriptProcessorRef.current.disconnect();
+        scriptProcessorRef.current = null;
       }
+
+      if (audioContextRef.current && audioContextRef.current.state !== 'closed') {
+        await audioContextRef.current.close();
+        audioContextRef.current = null;
+      }
+
+      if (mediaStreamRef.current) {
+        mediaStreamRef.current.getTracks().forEach(track => track.stop());
+        mediaStreamRef.current = null;
+      }
+
+      // Clear transcript buffer
+      transcriptBufferRef.current = {};
+
     } catch (error) {
       console.error('Error stopping listening:', error);
     }
@@ -495,8 +502,8 @@ To get started, could you please walk me through your initial thoughts on how yo
   useEffect(() => {
     return () => {
       stopListening();
-      if (audioContextRef.current) {
-        audioContextRef.current.close();
+      if (silenceTimeoutRef.current) {
+        clearTimeout(silenceTimeoutRef.current);
       }
       if (audioSourceRef.current) {
         audioSourceRef.current.stop();

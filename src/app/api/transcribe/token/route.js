@@ -7,8 +7,8 @@ export async function POST() {
       apiKey: process.env.ASSEMBLYAI_API_KEY
     });
 
-    const token = await client.realtime.createTemporaryToken({
-      expires_in: 480 // 8 minutes
+    const token = await client.streaming.createTemporaryToken({
+      expires_in_seconds: 480 // 8 minutes
     });
     console.log('Generated temporary token:', token);
     return NextResponse.json({ token });
