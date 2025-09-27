@@ -1,6 +1,5 @@
 import { GoogleGenAI } from '@google/genai';
 import { NextResponse } from 'next/server';
-import { getProblemContext } from '../utils/problems.js';
 
 // Helper function to create WAV header for PCM data
 function createWavHeader(dataLength, sampleRate = 24000, channels = 1, bitsPerSample = 16) {
@@ -51,8 +50,7 @@ export async function POST(request) {
     });
 
     const generateConversationPrompt = (input, history, problemContext, currentCode, language) => {
-      // Get problem context from external mapping
-      const context = problemContext || getProblemContext();
+      const context = problemContext;
 
       const basePrompt = `You are an AI technical interviewer conducting a coding interview. You are helping the candidate solve the "${context.title}" problem.
 

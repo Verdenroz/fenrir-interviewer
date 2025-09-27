@@ -3,6 +3,7 @@
 import { useState, useRef, useEffect, useCallback } from 'react';
 import { RealtimeTranscriber } from 'assemblyai';
 import Editor from '@monaco-editor/react';
+import { getProblemConfig, getStarterCode, getProblemContext, getAvailableProblems, getProblemDisplayName } from '@/config/problems';
 
 const CONVERSATION_STATES = {
   READY: 'ready',
@@ -10,57 +11,6 @@ const CONVERSATION_STATES = {
   AI_SPEAKING: 'ai_speaking'
 };
 
-const TWO_SUM_STARTER_CODE = `class Solution(object):
-    def twoSum(self, nums, target):
-        """
-        :type nums: List[int]
-        :type target: int
-        :rtype: List[int]
-        """
-        # Write your solution here
-        `;
-
-const TWO_SUM_PROBLEM_CONTEXT = {
-  title: "Two Sum",
-  difficulty: "Easy",
-  description: "Given an array of integers nums and an integer target, return indices of the two numbers such that they add up to target. You may assume there is exactly one solution.",
-  possibleApproaches: [
-    "Brute Force: O(n²) time, O(1) space - Check every pair of numbers",
-    "Hash Map: O(n) time, O(n) space - Use a hash map to store complements",
-    "Two Pointers: O(n log n) time, O(1) space - Sort array first, then use two pointers (but loses original indices)"
-  ],
-  hints: [
-    "Think about what you need to find for each number - its complement",
-    "Can you store previously seen numbers and their indices somewhere?",
-    "What's the complement of the current number? (target - current_number)",
-    "Have you seen this complement before in your iteration?"
-  ],
-  acceptableComplexity: {
-    runtime: "O(n) - Linear time is expected for optimal solution",
-    space: "O(n) - Hash map storage for seen numbers"
-  },
-  possibleSolutions: {
-    bruteForce: `def twoSum(self, nums, target):
-    for i in range(len(nums)):
-        for j in range(i + 1, len(nums)):
-            if nums[i] + nums[j] == target:
-                return [i, j]
-    return []`,
-    optimal: `def twoSum(self, nums, target):
-    num_map = {}
-    for i, num in enumerate(nums):
-        complement = target - num
-        if complement in num_map:
-            return [num_map[complement], i]
-        num_map[num] = i
-    return []`
-  },
-  testCases: [
-    { input: "nums = [2,7,11,15], target = 9", output: "[0,1]" },
-    { input: "nums = [3,2,4], target = 6", output: "[1,2]" },
-    { input: "nums = [3,3], target = 6", output: "[0,1]" }
-  ]
-};
 
 export default function Home() {
   // Voice interaction state
@@ -71,8 +21,12 @@ export default function Home() {
   const [error, setError] = useState(null);
   const [hasStartedInterview, setHasStartedInterview] = useState(false);
 
+  // Problem selection state
+  const [currentProblemId, setCurrentProblemId] = useState('two-sum');
+  const [currentLanguage, setCurrentLanguage] = useState('python');
+
   // Code editor state
-  const [codeContent, setCodeContent] = useState(TWO_SUM_STARTER_CODE);
+  const [codeContent, setCodeContent] = useState(() => getStarterCode('two-sum', 'python'));
 
   // Refs for voice functionality
   const transcriberRef = useRef(null);
@@ -97,45 +51,16 @@ export default function Home() {
   }, [hasStartedInterview]);
 
   const startInterview = useCallback(async () => {
-    const welcomeMessage = "Welcome! To start, could you please walk me through your initial thoughts on how you might approach this problem? How would you typically go about finding two numbers that add up to a specific target?";
-    
+    const welcomeMessage = `Welcome to your coding interview! I'll be helping you work through the "${getProblemDisplayName(currentProblemId)}" problem today.
+
+To get started, could you please walk me through your initial thoughts on how you might approach this problem? Don't worry about writing code yet - I'm just interested in hearing your thought process and any strategies that come to mind.`;
+
     const aiMessage = { role: 'assistant', content: welcomeMessage, timestamp: Date.now() };
     setConversationHistory([aiMessage]);
-    
-    // Generate and play the welcome audio
-    try {
-      const response = await fetch('/api/interview/generate', {
-        method: 'POST',
-        headers: {
-          'Content-Type': 'application/json',
-        },
-        body: JSON.stringify({
-          userInput: 'START_INTERVIEW',
-          conversationHistory: [],
-          problemContext: TWO_SUM_PROBLEM_CONTEXT,
-          currentCode: codeContent,
-          language: 'python'
-        })
-      });
 
-      if (response.ok) {
-        const data = await response.json();
-        if (data.audio) {
-          const binaryString = atob(data.audio);
-          const bytes = new Uint8Array(binaryString.length);
-          for (let i = 0; i < binaryString.length; i++) {
-            bytes[i] = binaryString.charCodeAt(i);
-          }
-          const responseAudio = new Blob([bytes], { type: 'audio/wav' });
-          await playAudioResponse(responseAudio);
-        }
-      }
-    } catch (error) {
-      console.error('Error starting interview:', error);
-      // Continue without audio if it fails
-      setConversationState(CONVERSATION_STATES.READY);
-    }
-  }, [codeContent]);
+    // Set state to ready immediately
+    setConversationState(CONVERSATION_STATES.READY);
+  }, [currentProblemId]);
 
   const getToken = useCallback(async () => {
     try {
@@ -178,9 +103,9 @@ export default function Home() {
         body: JSON.stringify({
           userInput,
           conversationHistory,
-          problemContext: TWO_SUM_PROBLEM_CONTEXT,
+          problemContext: getProblemContext(currentProblemId),
           currentCode: codeContent,
-          language: 'python'
+          language: currentLanguage
         })
       });
 
@@ -215,14 +140,20 @@ export default function Home() {
       setError('Failed to generate response: ' + error.message);
       setConversationState(CONVERSATION_STATES.READY);
     }
-  }, [conversationHistory, codeContent]);
+  }, [conversationHistory, codeContent, currentProblemId, currentLanguage]);
 
   const playAudioResponse = useCallback(async (audioBlob) => {
     try {
       setConversationState(CONVERSATION_STATES.AI_SPEAKING);
 
+      // Initialize audio context on first use and ensure it's resumed
       if (!audioContextRef.current) {
         audioContextRef.current = new AudioContext();
+      }
+
+      // Resume audio context if it's suspended (required for autoplay policies)
+      if (audioContextRef.current.state === 'suspended') {
+        await audioContextRef.current.resume();
       }
 
       const arrayBuffer = await audioBlob.arrayBuffer();
@@ -240,11 +171,20 @@ export default function Home() {
           audioSourceRef.current = null;
         };
 
-        source.start();
+        // Small delay to ensure audio context is ready
+        setTimeout(() => {
+          source.start();
+        }, 100);
 
       } catch (decodeError) {
+        console.warn('Web Audio API failed, falling back to HTML5 audio:', decodeError);
+
         const audioUrl = URL.createObjectURL(audioBlob);
         const audio = new Audio(audioUrl);
+
+        // Ensure audio can play
+        audio.preload = 'auto';
+        audio.volume = 1.0;
 
         audio.onended = () => {
           setConversationState(CONVERSATION_STATES.READY);
@@ -258,7 +198,16 @@ export default function Home() {
           URL.revokeObjectURL(audioUrl);
         };
 
-        await audio.play();
+        audio.oncanplaythrough = () => {
+          audio.play().catch(playError => {
+            console.error('Audio play failed:', playError);
+            setError('Failed to play audio response');
+            setConversationState(CONVERSATION_STATES.READY);
+            URL.revokeObjectURL(audioUrl);
+          });
+        };
+
+        audio.load(); // Trigger loading
       }
 
     } catch (error) {
@@ -468,6 +417,18 @@ export default function Home() {
     setCodeContent(value || '');
   };
 
+  const handleProblemChange = (problemId) => {
+    setCurrentProblemId(problemId);
+    setCodeContent(getStarterCode(problemId, currentLanguage));
+    setConversationHistory([]);
+    setHasStartedInterview(false);
+  };
+
+  const handleLanguageChange = (language) => {
+    setCurrentLanguage(language);
+    setCodeContent(getStarterCode(currentProblemId, language));
+  };
+
   const handleEditorDidMount = (editor, monaco) => {
     editorRef.current = editor;
     editor.updateOptions({
@@ -539,41 +500,61 @@ export default function Home() {
       <div className="interview-container">
         {/* Problem Description Panel */}
         <div className="problem-panel">
-          <h3 className="title">PROBLEM DESCRIPTION</h3>
-          <p><strong>Two Sum — Easy</strong></p>
-          <p className="problem_text">
-            Given an array of integers <code>nums</code> and an integer <code>target</code>,
-            return indices of the two numbers such that they add up to <code>target</code>.
-          </p>
-          <p className="problem_text">
-            You may assume there is exactly one solution.
-          </p>
-
-          <div className="example">
-            <strong>Example 1:</strong>
-            <p>
-              Input: nums = [2,7,11,15], target = 9<br />
-              Output: [0,1]<br />
-              Explanation: Because nums[0] + nums[1] == 9, we return [0, 1].
-            </p>
+          <div className="problem-header">
+            <h3 className="title">PROBLEM DESCRIPTION</h3>
+            <div className="problem-controls">
+              <select
+                value={currentProblemId}
+                onChange={(e) => handleProblemChange(e.target.value)}
+                className="problem-selector"
+              >
+                {getAvailableProblems().map(problemId => (
+                  <option key={problemId} value={problemId}>
+                    {getProblemDisplayName(problemId)}
+                  </option>
+                ))}
+              </select>
+            </div>
           </div>
 
-          <div className="example">
-            <strong>Example 2:</strong>
-            <p>
-              Input: nums = [3,2,4], target = 6<br />
-              Output: [1,2]
-            </p>
-          </div>
+          <p><strong>{getProblemDisplayName(currentProblemId)}</strong></p>
+          <p className="problem_text">
+            {getProblemContext(currentProblemId).description}
+          </p>
+
+          {getProblemContext(currentProblemId).testCases?.slice(0, 2).map((testCase, index) => (
+            <div key={index} className="example">
+              <strong>Example {index + 1}:</strong>
+              <p>
+                Input: {testCase.input}<br />
+                Output: {testCase.output}<br />
+                {testCase.explanation && <>Explanation: {testCase.explanation}</>}
+              </p>
+            </div>
+          ))}
         </div>
 
         {/* Code Editor Panel */}
         <div className="code-panel">
-          <h3 className="title">YOUR SOLUTION</h3>
+          <div className="code-header">
+            <h3 className="title">YOUR SOLUTION</h3>
+            <div className="language-controls">
+              <select
+                value={currentLanguage}
+                onChange={(e) => handleLanguageChange(e.target.value)}
+                className="language-selector"
+              >
+                <option value="python">Python</option>
+                <option value="javascript">JavaScript</option>
+                <option value="java">Java</option>
+              </select>
+            </div>
+          </div>
+
           <div className="editor-container">
             <Editor
               height="100%"
-              language="python"
+              language={currentLanguage}
               value={codeContent}
               theme="vs-dark"
               onChange={handleEditorChange}
