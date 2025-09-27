@@ -2,12 +2,12 @@ import { GoogleGenAI } from '@google/genai';
 import { NextResponse } from 'next/server';
 
 // Helper function to create WAV header for PCM data
-function createWavHeader(dataLength, sampleRate = 24000, channels = 1, bitsPerSample = 16) {
+function createWavHeader(dataLength: number, sampleRate: number = 24000, channels: number = 1, bitsPerSample: number = 16) {
   const buffer = new ArrayBuffer(44);
   const view = new DataView(buffer);
 
   // RIFF chunk descriptor
-  const writeString = (offset, string) => {
+  const writeString = (offset: number, string: string) => {
     for (let i = 0; i < string.length; i++) {
       view.setUint8(offset + i, string.charCodeAt(i));
     }
@@ -34,9 +34,17 @@ function createWavHeader(dataLength, sampleRate = 24000, channels = 1, bitsPerSa
   return new Uint8Array(buffer);
 }
 
-export async function POST(request) {
+interface RequestBody {
+  userInput: string;
+  conversationHistory: Array<{ role: string; content: string; timestamp: number }>;
+  problemContext: any;
+  currentCode: string;
+  language: string;
+}
+
+export async function POST(request: Request) {
   try {
-    const { userInput, conversationHistory, problemContext, currentCode, language = 'python' } = await request.json();
+    const { userInput, conversationHistory, problemContext, currentCode, language = 'python' }: RequestBody = await request.json();
 
     if (!userInput) {
       return NextResponse.json(
@@ -45,11 +53,15 @@ export async function POST(request) {
       );
     }
 
+    if (!process.env.GEMINI_API_KEY) {
+      throw new Error('GEMINI_API_KEY environment variable is required');
+    }
+    
     const client = new GoogleGenAI({
       apiKey: process.env.GEMINI_API_KEY
     });
 
-    const generateConversationPrompt = (input, history, problemContext, currentCode, language) => {
+    const generateConversationPrompt = (input: string, history: Array<{ role: string; content: string; timestamp: number }>, problemContext: any, currentCode: string, language: string) => {
       const context = problemContext;
 
       const basePrompt = `You are an AI technical interviewer conducting a coding interview. You are helping the candidate solve the "${context.title}" problem.
@@ -59,10 +71,10 @@ PROBLEM CONTEXT:
 - Description: ${context.description}
 
 POSSIBLE APPROACHES:
-${(context.possibleApproaches || context.approaches || []).map(approach => `- ${approach}`).join('\n')}
+${(context.possibleApproaches || context.approaches || []).map((approach: string) => `- ${approach}`).join('\n')}
 
 HINTS TO GUIDE CANDIDATE:
-${(context.hints || []).map(hint => `- ${hint}`).join('\n')}
+${(context.hints || []).map((hint: string) => `- ${hint}`).join('\n')}
 
 ACCEPTABLE COMPLEXITY:
 - Runtime: ${context.acceptableComplexity?.runtime || 'Not specified'}
@@ -86,7 +98,7 @@ YOUR ROLE AS INTERVIEWER:
 - If they seem completely stuck, offer gentle guidance toward a working approach
 
 CONVERSATION HISTORY:
-${history.map(h => `${h.role}: ${h.content}`).join('\n')}
+${history.map((h: any) => `${h.role}: ${h.content}`).join('\n')}
 
 CANDIDATE: "${input}"
 
@@ -102,10 +114,8 @@ Respond as a technical interviewer. Keep responses under 80 words and sound natu
       model: 'gemini-2.5-flash',
       contents: prompt,
       config: {
-        generationConfig: {
-          temperature: 0.7,
-          maxOutputTokens: 200
-        }
+        temperature: 0.7,
+        maxOutputTokens: 200
       }
     });
 
@@ -113,7 +123,7 @@ Respond as a technical interviewer. Keep responses under 80 words and sound natu
     console.log('Generated text response:', responseText);
 
     // Convert text to speech using TTS model
-    let audioBase64 = null;
+    let audioBase64: string | null = null;
     try {
       const ttsResponse = await client.models.generateContent({
         model: 'gemini-2.5-flash-preview-tts',
@@ -154,7 +164,8 @@ Respond as a technical interviewer. Keep responses under 80 words and sound natu
         console.log('Final audio response, length:', audioBase64.length);
       }
     } catch (ttsError) {
-      console.warn('TTS generation failed, returning text-only:', ttsError.message);
+      const message = ttsError instanceof Error ? ttsError.message : String(ttsError);
+      console.warn('TTS generation failed, returning text-only:', message);
       // Continue without audio if TTS fails
     }
 
@@ -164,10 +175,10 @@ Respond as a technical interviewer. Keep responses under 80 words and sound natu
       success: true
     });
 
-  } catch (error) {
+  } catch (error: any) {
     console.error('Error generating interview response:', error);
     return NextResponse.json(
-      { error: 'Failed to generate response: ' + error.message },
+      { error: 'Failed to generate response: ' + (error?.message || 'Unknown error') },
       { status: 500 }
     );
   }
